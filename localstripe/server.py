@@ -40,8 +40,7 @@ def json_response(*args, **kwargs):
 
 
 async def add_cors_headers(request, response):
-    origin = request.headers.get('Origin')
-    if origin:
+    if origin := request.headers.get('Origin'):
         response.headers['Access-Control-Allow-Origin'] = origin
         response.headers['Access-Control-Allow-Headers'] = \
             'Content-Type, Accept'
@@ -83,7 +82,7 @@ def unflatten_data(multidict):
     # Transform `{'attributes[]': 'size', 'attributes[]': 'gender'}` into
     # `{'attributes': ['size', 'gender']}`
     def handle_multiple_keys(multidict):
-        data = dict()
+        data = {}
         for k in multidict.keys():
             values = multidict.getall(k)
             values = [handle_multiple_keys(v) if hasattr(v, 'keys') else v
@@ -101,8 +100,8 @@ def unflatten_data(multidict):
         for k, v in list(data.items()):
             r = re.search(r'^([^\[]+)\[([^\[]+)\](.*)$', k)
             if r:
-                k0 = r.group(1)
-                k1 = r.group(2) + r.group(3)
+                k0 = r[1]
+                k1 = r[2] + r[3]
                 data[k0] = data.get(k0, {})
                 data[k0][k1] = v
                 data[k0] = make_tree(data[k0])
@@ -114,8 +113,9 @@ def unflatten_data(multidict):
     # Transform `{'items': {'0': {'plan': 'pro-yearly'}}}` into
     # `{'items': [{'plan': 'pro-yearly'}]}`
     def transform_lists(data):
-        if (len(data) > 0 and
-                all([re.match(r'^[0-9]+$', k) for k in data.keys()])):
+        if len(data) > 0 and all(
+            re.match(r'^[0-9]+$', k) for k in data.keys()
+        ):
             new_data = [(int(k), v) for k, v in data.items()]
             new_data.sort(key=lambda k: int(k[0]))
             data = []
@@ -180,10 +180,16 @@ async def auth_middleware(request, handler):
         else:
             data = unflatten_data(request.query)
 
-        if not is_auth and accept_key_in_post_data:
-            if ('key' in data and type(data['key']) == str and
-                    data['key'].startswith('pk_')):
-                is_auth = True
+        if (
+            not is_auth
+            and accept_key_in_post_data
+            and (
+                'key' in data
+                and type(data['key']) == str
+                and data['key'].startswith('pk_')
+            )
+        ):
+            is_auth = True
 
     if not is_auth:
         raise UserError(401, 'Unauthorized')
@@ -277,17 +283,12 @@ for cls in (BalanceTransaction, Charge, Coupon, Customer, Event, Invoice,
             InvoiceItem, PaymentIntent, PaymentMethod, Payout, Plan, Product,
             Refund, SetupIntent, Source, Subscription, SubscriptionItem,
             TaxRate, Token):
-    for method, url, func in (
-            ('POST', '/v1/' + cls.object + 's', api_create),
-            ('GET', '/v1/' + cls.object + 's/{id}', api_retrieve),
-            ('POST', '/v1/' + cls.object + 's/{id}', api_update),
-            ('DELETE', '/v1/' + cls.object + 's/{id}', api_delete),
-            ('GET', '/v1/' + cls.object + 's', api_list_all)):
+    for method, url, func in (('POST', f'/v1/{cls.object}s', api_create), ('GET', f'/v1/{cls.object}' + 's/{id}', api_retrieve), ('POST', f'/v1/{cls.object}' + 's/{id}', api_update), ('DELETE', f'/v1/{cls.object}' + 's/{id}', api_delete), ('GET', f'/v1/{cls.object}s', api_list_all)):
         app.router.add_route(method, url, func(cls, url))
 
 
 def localstripe_js(request):
-    path = os.path.dirname(os.path.realpath(__file__)) + '/localstripe-v3.js'
+    path = f'{os.path.dirname(os.path.realpath(__file__))}/localstripe-v3.js'
     with open(path) as f:
         return web.Response(text=f.read(),
                             content_type='application/javascript')
