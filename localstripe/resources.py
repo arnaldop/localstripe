@@ -64,8 +64,9 @@ store = Store()
 
 
 def random_id(n):
-    return ''.join(random.choice(string.ascii_letters + string.digits)
-                   for i in range(n))
+    return ''.join(
+        random.choice(string.ascii_letters + string.digits) for _ in range(n)
+    )
 
 
 def fingerprint(s: str):
@@ -110,28 +111,28 @@ class StripeObject(object):
     object = None
 
     def __init__(self, id=None):
-        if not isinstance(self, List):
-            if id is None:
-                assert hasattr(self, '_id_prefix')
-                self.id = getattr(self, '_id_prefix') + random_id(14)
-            else:
-                self.id = id
+        if isinstance(self, List):
+            return
+        if id is None:
+            assert hasattr(self, '_id_prefix')
+            self.id = getattr(self, '_id_prefix') + random_id(14)
+        else:
+            self.id = id
 
-            self.created = int(time.time())
+        self.created = int(time.time())
 
-            self.livemode = False
+        self.livemode = False
 
-            key = self.object + ':' + self.id
-            if key in store.keys():
-                raise UserError(409, 'Conflict')
-            store[key] = self
+        key = f'{self.object}:{self.id}'
+        if key in store.keys():
+            raise UserError(409, 'Conflict')
+        store[key] = self
 
     @classmethod
     def _get_class_for_id(cls, id):
         for child in cls.__subclasses__():
-            if hasattr(child, '_id_prefix'):
-                if id.startswith(child._id_prefix):
-                    return child
+            if hasattr(child, '_id_prefix') and id.startswith(child._id_prefix):
+                return child
 
     @classmethod
     def _api_create(cls, **data):
@@ -139,7 +140,7 @@ class StripeObject(object):
 
     @classmethod
     def _api_retrieve(cls, id):
-        obj = store.get(cls.object + ':' + id)
+        obj = store.get(f'{cls.object}:{id}')
 
         if obj is None:
             raise UserError(404, 'Not Found')
@@ -154,7 +155,7 @@ class StripeObject(object):
 
     @classmethod
     def _api_delete(cls, id):
-        key = cls.object + ':' + id
+        key = f'{cls.object}:{id}'
         if key not in store.keys():
             raise UserError(404, 'Not Found')
         del store[key]
@@ -166,18 +167,20 @@ class StripeObject(object):
             raise UserError(400, 'Unexpected ' + ', '.join(kwargs.keys()))
 
         li = List(url, limit=limit, starting_after=starting_after)
-        li._list = [value for key, value in store.items()
-                    if key.startswith(cls.object + ':')]
+        li._list = [
+            value
+            for key, value in store.items()
+            if key.startswith(f'{cls.object}:')
+        ]
+
         return li
 
     def _update(self, **data):
         # Do not modify object during checks -> do two loops
-        for key, value in data.items():
+        for key in data:
             if key.startswith('_') or not hasattr(self, key):
                 raise UserError(400, 'Bad request')
-        # Treat metadata differently: do not delete absent fields
-        metadata = data.pop('metadata', None)
-        if metadata:
+        if metadata := data.pop('metadata', None):
             if type(metadata) is not dict:
                 raise UserError(400, 'Bad request')
             self.metadata = self.metadata or {}
@@ -191,7 +194,7 @@ class StripeObject(object):
             if expand is None:
                 expand = []
             assert type(expand) is list
-            assert all([type(e) is str for e in expand])
+            assert all(type(e) is str for e in expand)
         except AssertionError:
             raise UserError(400, 'Bad request')
 
@@ -218,11 +221,7 @@ class StripeObject(object):
         for prop in dir(self):
             if not prop.startswith('_') and prop not in obj:
                 value = getattr(self, prop)
-                if isinstance(value, StripeObject):
-                    obj[prop] = value._export()
-                else:
-                    obj[prop] = value
-
+                obj[prop] = value._export() if isinstance(value, StripeObject) else value
         def do_expand(path, obj):
             if type(obj) is list:
                 for i in obj:
@@ -235,11 +234,12 @@ class StripeObject(object):
                     obj[k] = cls._api_retrieve(id)._export()
                 if path is not None:
                     do_expand(path, obj[k])
+
         try:
             for path in expand:
                 do_expand(path, obj)
         except KeyError as e:
-            raise UserError(400, 'Bad expand %s' % e)
+            raise UserError(400, f'Bad expand {e}')
 
         return obj
 
@@ -269,23 +269,16 @@ class Balance(object):
         schedule_webhook(Event('balance.available', self))
 
     @classmethod
-    def _api_retrieve(self):
-        obj = store.get(self.object)
-        if obj is None:
-            return self()
-        return obj
+    def _api_retrieve(cls):
+        obj = store.get(cls.object)
+        return cls() if obj is None else obj
 
     def _export(self, expand=None):
-        obj = {}
-
-        for key, value in vars(self).items():
-            if not key.startswith('_'):
-                if isinstance(value, dict):
-                    obj[key] = value.copy()
-                else:
-                    obj[key] = value
-
-        return obj
+        return {
+            key: value.copy() if isinstance(value, dict) else value
+            for key, value in vars(self).items()
+            if not key.startswith('_')
+        }
 
 
 extra_apis.append(('GET', '/v1/balance', Balance._api_retrieve))
@@ -608,8 +601,7 @@ class Charge(StripeObject):
 
     @property
     def refunds(self):
-        return Refund._api_list_all('/v1/charges/' + self.id + '/refunds',
-                                    charge=self.id)
+        return Refund._api_list_all(f'/v1/charges/{self.id}/refunds', charge=self.id)
 
     @property
     def amount_refunded(self):
@@ -629,7 +621,7 @@ class Charge(StripeObject):
                 assert type(created) in (dict, str)
                 if type(created) is dict:
                     assert len(created.keys()) == 1 and \
-                        list(created.keys())[0] in ('gt', 'gte', 'lt', 'lte')
+                            list(created.keys())[0] in ('gt', 'gte', 'lt', 'lte')
                     date = try_convert_to_int(list(created.values())[0])
                 elif type(created) is str:
                     date = try_convert_to_int(created)
@@ -640,9 +632,8 @@ class Charge(StripeObject):
         if customer:
             Customer._api_retrieve(customer)  # to return 404 if not existant
 
-        if created:
-            if type(created) is str or not created.get('gt'):
-                raise UserError(500, 'Not implemented')
+        if created and (type(created) is str or not created.get('gt')):
+            raise UserError(500, 'Not implemented')
 
         li = super(Charge, cls)._api_list_all(url, limit=limit,
                                               starting_after=starting_after)
@@ -781,8 +772,8 @@ class Customer(StripeObject):
         if payment_method is not None:
             PaymentMethod._api_attach(payment_method, customer=self.id)
 
-        self.sources = List('/v1/customers/' + self.id + '/sources')
-        self.tax_ids = List('/v1/customers/' + self.id + '/tax_ids')
+        self.sources = List(f'/v1/customers/{self.id}/sources')
+        self.tax_ids = List(f'/v1/customers/{self.id}/tax_ids')
         self.tax_ids._list = [TaxId(customer=self.id, **data)
                               for data in tax_id_data]
 
@@ -799,14 +790,13 @@ class Customer(StripeObject):
     @property
     def currency(self):
         source = self._get_default_payment_method_or_source()
-        if isinstance(source, Source):  # not Card
-            return source.currency
-        return 'eur'  # arbitrary default
+        return source.currency if isinstance(source, Source) else 'eur'
 
     @property
     def subscriptions(self):
         return Subscription._api_list_all(
-            '/v1/customers/' + self.id + '/subscriptions', customer=self.id)
+            f'/v1/customers/{self.id}/subscriptions', customer=self.id
+        )
 
     @classmethod
     def _api_create(cls, source=None, **data):
@@ -994,8 +984,17 @@ class Customer(StripeObject):
         obj = Subscription._api_retrieve(subscription_id)
 
         if obj.customer != id:
-            raise UserError(404, 'Customer ' + id + ' does not have a '
-                                 'subscription with ID ' + subscription_id)
+            raise UserError(
+                404,
+                (
+                    (
+                        f'Customer {id}' + ' does not have a '
+                        'subscription with ID '
+                    )
+                    + subscription_id
+                ),
+            )
+
 
         return obj
 
@@ -1004,8 +1003,17 @@ class Customer(StripeObject):
         obj = Subscription._api_retrieve(subscription_id)
 
         if obj.customer != id:
-            raise UserError(404, 'Customer ' + id + ' does not have a '
-                                 'subscription with ID ' + subscription_id)
+            raise UserError(
+                404,
+                (
+                    (
+                        f'Customer {id}' + ' does not have a '
+                        'subscription with ID '
+                    )
+                    + subscription_id
+                ),
+            )
+
 
         return Subscription._api_update(subscription_id, **data)
 
